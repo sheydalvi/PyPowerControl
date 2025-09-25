@@ -1,0 +1,108 @@
+import customtkinter as ctk
+from tkinter import messagebox
+from src.serial_comm import PowerSupplyCommunicator
+
+ctk.set_appearance_mode("System")  # options: "system", "dark", "light"
+ctk.set_default_color_theme("blue")  # you can change this to "green", "dark-blue", etc.
+
+class PowerSupplyGUI(ctk.CTk):
+    def __init__(self, port, baud_rate=9600):
+        super().__init__()
+        self.title("Power Supply Controller")
+        self.geometry("500x800")
+
+        self.psu = PowerSupplyCommunicator(port, baud_rate)
+        try:
+            self.psu.connect()
+        except Exception as e:
+            messagebox.showerror("Connection Error", f"Could not connect: {e}")
+            self.destroy()
+            return
+
+        # theme toggle dropdown
+        theme_frame = ctk.CTkFrame(self)
+        theme_frame.pack(pady=10)
+
+        ctk.CTkLabel(theme_frame, text="Theme:").pack(side="left", padx=5)
+
+        self.theme_option = ctk.CTkOptionMenu(theme_frame,
+                                              values=["System", "Light", "Dark"],
+                                              command=self.change_theme)
+        self.theme_option.set("System")
+        self.theme_option.pack(side="left", padx=5)
+
+        # command buttons
+        commands = {
+            "FS\n": "Get Status",
+            "C1\n": "Fan On",
+            "C0\n": "Fan Off",
+            "S1\n": "Shutter On",
+            "S0\n": "Shutter Off",
+            "L1\n": "Lamp On",
+            "L0\n": "Lamp Off"
+        }
+
+        btn_frame = ctk.CTkFrame(self)
+        btn_frame.pack(side="top", padx=5, pady=10)
+
+        for cmd, label in commands.items():
+            btn = ctk.CTkButton(btn_frame, text=label, width=100,
+                                command=lambda c=cmd: self.send_command(c))
+            # btn.pack(side="left", padx=5)
+            btn.pack(pady=5)
+
+        # output area
+        self.output_area = ctk.CTkTextbox(self, width=450, height=50)
+        self.output_area.pack(padx=10, pady=10)
+
+        # power entry and set button
+        entry_frame = ctk.CTkFrame(self)
+        entry_frame.pack(pady=10)
+
+        self.power_entry = ctk.CTkEntry(entry_frame, placeholder_text="Enter power (0–9999)", width=150)
+        self.power_entry.pack(side="left", padx=5)
+
+        set_btn = ctk.CTkButton(entry_frame, text="Set Power", command=self.set_power)
+        set_btn.pack(side="left", padx=5)
+
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def change_theme(self, mode):
+        ctk.set_appearance_mode(mode)
+
+    def send_command(self, command):
+        try:
+            response = self.psu.send_command(command + "\r")
+            cleaned_response = response.replace('\x00', '').strip()
+
+            print("RAW BYTES:", repr(cleaned_response))
+
+            self.output_area.insert("end", f"> {command}\n{response}\n\n")
+            self.output_area.see("end")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to send command: {e}")
+
+    def set_power(self):
+        value = self.power_entry.get().strip()
+
+        if not value.isdigit():
+            messagebox.showwarning("Invalid Input", "Please enter a number.")
+            return
+
+        power = int(value)
+        if not (0 <= power <= 9999):
+            messagebox.showwarning("Invalid Range", "Value must be between 0 and 9999.")
+            return
+
+        formatted_value = f"{power:04d}"
+        command = f"P={formatted_value}"
+        self.send_command(command)
+
+    def on_close(self):
+        self.psu.disconnect()
+        self.destroy()
+
+if __name__ == "__main__":
+    port = "COM3"  # adjust to your port
+    app = PowerSupplyGUI(port)
+    app.mainloop()

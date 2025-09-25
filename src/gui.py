@@ -19,8 +19,13 @@ class PowerSupplyGUI(tk.Tk):
         # create buttons for commands
         commands = {
             "FSXXX\n": "get status",
-            "C1\n": "turn on fan",
-            "C0\n": "turn off fan"
+            "C1\n": "fan on",
+            "C0\n": "fan off",
+            "S1\n": "shutter on",
+            "S0\n": "shutter off",
+            "L1\n": "lamp on",
+            "L0\n": "lamp off"
+
         }
 
         btn_frame = tk.Frame(self)
@@ -37,7 +42,8 @@ class PowerSupplyGUI(tk.Tk):
 
         # close connection on exit
         self.protocol("wm_delete_window", self.on_close)
-
+      
+    
     def send_command(self, command):
         try:
             response = self.psu.send_command(command + "\r")
@@ -51,6 +57,25 @@ class PowerSupplyGUI(tk.Tk):
             self.output_area.see(tk.END)
         except Exception as e:
             messagebox.showerror("error", f"failed to send command: {e}")
+
+    def set_power(self):
+        value = self.power_entry.get().strip()
+
+        if not value.isdigit():
+            messagebox.showwarning("invalid input", "please enter a number.")
+            return
+
+        power = int(value)
+        if not (0 <= power <= 9999):
+            messagebox.showwarning("invalid range", "value must be 0–9999.")
+            return
+
+        # pad the number with leading zeros to 4 digits
+        formatted_value = f"{power:04d}"
+        command = f"P={formatted_value}"
+
+        self.send_command(command)
+
 
     def on_close(self):
         self.psu.disconnect()
