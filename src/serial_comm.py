@@ -1,19 +1,31 @@
-# main.py
-from src.serial_comm import PowerSupplyCommunicator
+# src/serial_comm.py
+import serial
+import time
 
-def main():
-    port = "COM3"        # Change this to your COM port
-    baud_rate = 9600     # Match what you used in Termite
+class PowerSupplyCommunicator:
+    def __init__(self, port, baud_rate=9600, timeout=2):
+        self.port = port
+        self.baud_rate = baud_rate
+        self.timeout = timeout
+        self.ser = None
 
-    psu = PowerSupplyCommunicator(port, baud_rate)
-    psu.connect()
+    def connect(self):
+        try:
+            self.ser = serial.Serial(self.port, self.baud_rate, timeout=self.timeout)
+            time.sleep(1)  # Allow time to establish connection
+        except serial.SerialException as e:
+            print(f"Failed to connect: {e}")
+            raise
 
-    try:
-        command = "FS\r"  # Adjust line ending as needed
-        response = psu.send_command(command)
-        print("Response from power supply:", response)
-    finally:
-        psu.disconnect()
+    def disconnect(self):
+        if self.ser and self.ser.is_open:
+            self.ser.close()
 
-if __name__ == "__main__":
-    main()
+    def send_command(self, command):
+        if not self.ser or not self.ser.is_open:
+            raise ConnectionError("Serial port is not open.")
+
+        self.ser.write(command.encode())
+        time.sleep(0.5)  # Wait for device to respond
+        response = self.ser.read_all().decode(errors='ignore')
+        return response
