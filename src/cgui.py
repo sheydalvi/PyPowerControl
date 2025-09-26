@@ -1,6 +1,9 @@
+# src/cgui.py
 import customtkinter as ctk
 from tkinter import messagebox
 from src.serial_comm import PowerSupplyCommunicator
+from serial.tools import list_ports
+
 
 ctk.set_appearance_mode("System")  # options: "system", "dark", "light"
 ctk.set_default_color_theme("blue")  # you can change this to "green", "dark-blue", etc.
@@ -10,14 +13,6 @@ class PowerSupplyGUI(ctk.CTk):
         super().__init__()
         self.title("Power Supply Controller")
         self.geometry("500x800")
-
-        self.psu = PowerSupplyCommunicator(port, baud_rate)
-        try:
-            self.psu.connect()
-        except Exception as e:
-            messagebox.showerror("Connection Error", f"Could not connect: {e}")
-            self.destroy()
-            return
 
         # theme toggle dropdown
         theme_frame = ctk.CTkFrame(self)
@@ -30,6 +25,28 @@ class PowerSupplyGUI(ctk.CTk):
                                               command=self.change_theme)
         self.theme_option.set("System")
         self.theme_option.pack(side="left", padx=5)
+
+
+        # Serial port selector
+        self.psu = None
+        self.baud_rate = baud_rate
+
+        port_frame = ctk.CTkFrame(self)
+        port_frame.pack(pady=10)
+
+        ctk.CTkLabel(port_frame, text="Select Serial Port:").pack(side="left", padx=5)
+
+        available_ports = [port.device for port in list_ports.comports()]
+        self.port_option = ctk.CTkOptionMenu(port_frame, values=available_ports)
+        if available_ports:
+            self.port_option.set(available_ports[0])
+        self.port_option.pack(side="left", padx=5)
+
+        connect_btn = ctk.CTkButton(port_frame, text="Connect", command=self.connect_to_port)
+        connect_btn.pack(side="left", padx=5)
+
+
+
 
         # command buttons
         commands = {
@@ -67,10 +84,30 @@ class PowerSupplyGUI(ctk.CTk):
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
+    
+
+
     def change_theme(self, mode):
         ctk.set_appearance_mode(mode)
 
+    
+    def connect_to_port(self):
+        selected_port = self.port_option.get()
+        if not selected_port:
+            messagebox.showwarning("No Port", "Please select a serial port.")
+            return
+
+        self.psu = PowerSupplyCommunicator(selected_port, self.baud_rate)
+        try:
+            self.psu.connect()
+            messagebox.showinfo("Connected", f"Connected to {selected_port}")
+        except Exception as e:
+            messagebox.showerror("Connection Error", f"Could not connect: {e}")
+
     def send_command(self, command):
+        if not self.psu:
+            messagebox.showerror("Not Connected", "Please connect to a serial port first.")
+            return
         try:
             response = self.psu.send_command(command + "\r")
             cleaned_response = response.replace('\x00', '').strip()
@@ -84,6 +121,10 @@ class PowerSupplyGUI(ctk.CTk):
 
     def set_power(self):
         value = self.power_entry.get().strip()
+
+        if not self.psu:
+            messagebox.showerror("Not Connected", "Please connect to a serial port first.")
+            return
 
         if not value.isdigit():
             messagebox.showwarning("Invalid Input", "Please enter a number.")

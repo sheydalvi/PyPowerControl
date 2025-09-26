@@ -1,8 +1,8 @@
-# from src.gui import PowerSupplyGUI
+# main.py
 from src.cgui import PowerSupplyGUI
 
 
 if __name__ == "__main__":
-    port = "COM3"  # change to your port
-    app = PowerSupplyGUI(port)
+    # port = "COM3"  # change to your port
+    app = PowerSupplyGUI(port=None)
     app.mainloop()
