@@ -1,12 +1,14 @@
 # src/cgui.py
 import customtkinter as ctk
 from tkinter import messagebox
-from src.serial_comm import PowerSupplyCommunicator
+from src.serial_comm import PowerSupplyCommunicator, find_com_port_by_sf_response
 from serial.tools import list_ports
 
 
 ctk.set_appearance_mode("System")  # options: "system", "dark", "light"
 ctk.set_default_color_theme("blue")  # you can change this to "green", "dark-blue", etc.
+
+
 
 class PowerSupplyGUI(ctk.CTk):
     def __init__(self, port, baud_rate=9600):
@@ -45,6 +47,7 @@ class PowerSupplyGUI(ctk.CTk):
         connect_btn = ctk.CTkButton(port_frame, text="Connect", command=self.connect_to_port)
         connect_btn.pack(side="left", padx=5)
 
+        
 
 
 
@@ -84,24 +87,28 @@ class PowerSupplyGUI(ctk.CTk):
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
-    
-
-
     def change_theme(self, mode):
         ctk.set_appearance_mode(mode)
 
-    
     def connect_to_port(self):
-        selected_port = self.port_option.get()
-        if not selected_port:
-            messagebox.showwarning("No Port", "Please select a serial port.")
+        TARGET_SERIAL = "1234"
+        matched_port = find_com_port_by_sf_response(TARGET_SERIAL, self.baud_rate)
+        # matched_port = self.port_option.get()
+        if not matched_port:
+            messagebox.showwarning("No Port", "SN not found")
             return
 
-        self.psu = PowerSupplyCommunicator(selected_port, self.baud_rate)
+        self.psu = PowerSupplyCommunicator(matched_port, self.baud_rate)
         try:
             self.psu.connect()
-            messagebox.showinfo("Connected", f"Connected to {selected_port}")
+            response = self.psu.send_command("FS\n")  # Or another safe 'status' command
+            if not response.strip():
+                raise Exception("No response from device. Is it powered on?")
+            messagebox.showinfo("Connected", f"Connected to {matched_port}")
+            print("Device response:", response)            
         except Exception as e:
+            self.psu.disconnect()
+            self.psu = None
             messagebox.showerror("Connection Error", f"Could not connect: {e}")
 
     def send_command(self, command):
@@ -140,7 +147,8 @@ class PowerSupplyGUI(ctk.CTk):
         self.send_command(command)
 
     def on_close(self):
-        self.psu.disconnect()
+        if self.psu:
+            self.psu.disconnect()
         self.destroy()
 
 if __name__ == "__main__":
