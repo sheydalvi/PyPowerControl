@@ -53,20 +53,6 @@ def list_available_ports() -> List[str]:
     # all ui code should call this instead of accessing serial.tools.list_ports directly
     return [p.device for p in serial.tools.list_ports.comports()]
 
-def _clean_response(raw: bytes) -> str:
-    """
-    clean device responses:
-    - decode as ascii (fallback to latin-1 if needed)
-    - strip nulls and surrounding whitespace/newlines
-    """
-    try:
-        text = raw.decode("ascii", errors="ignore")
-    except Exception:
-        text = raw.decode("latin-1", errors="ignore")
-    # remove any embedded nulls the device might emit
-    text = text.replace("\x00", "")
-    return text.strip()
-
 class PowerSupplyCommunicator:
     def __init__(self, baudrate=9600,  timeout: float = 0.05) -> None:
         # self.port = port
@@ -102,8 +88,7 @@ class PowerSupplyCommunicator:
         # optional short wait for device to generate a reply
         if wait_s > 0:
             time.sleep(wait_s)
-        raw = self._ser.read(1024)
-        return _clean_response(raw)
+        return None
         
     def query_status(self) -> dict:
         """
@@ -133,7 +118,6 @@ class PowerSupplyCommunicator:
         parsed = _parse_status_block(raw)
         self.last_status = parsed
         return parsed
-
 
 def find_com_port_by_sn(target_serial, baudrate: int = 9600, timeout: float = 2) -> str | None:
     """

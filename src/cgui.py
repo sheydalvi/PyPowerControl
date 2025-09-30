@@ -5,11 +5,8 @@ from tkinter import messagebox
 import tkinter as tk
 from src.serial_comm import PowerSupplyCommunicator, list_available_ports, find_com_port_by_sn
 
-
-
 ctk.set_appearance_mode("System")  # options: "system", "dark", "light"
 ctk.set_default_color_theme("blue")  # you can change this to "green", "dark-blue", etc.
-
 
 COMMANDS: Dict[str, tuple[str, str]] = {
     "fan": ("C1", "C0"),
@@ -25,7 +22,6 @@ def command_for(name: str, state_on: bool) -> str:
         raise KeyError(f"unknown command group '{name}'")
     on_cmd, off_cmd = COMMANDS[name]
     return on_cmd if state_on else off_cmd
-
 
 class PowerSupplyGUI(ctk.CTk):
     """
@@ -67,7 +63,6 @@ class PowerSupplyGUI(ctk.CTk):
                         pass
         except Exception:
             pass
-
 
     def __init__(self) -> None:
         super().__init__()
@@ -170,7 +165,7 @@ class PowerSupplyGUI(ctk.CTk):
         self.set_btn = ctk.CTkButton(power_row, text="set", command=self.set_power, width=80)
         self.set_btn.pack(side="left", padx=6)
 
-        self.status_btn = ctk.CTkButton(power_row, text="status", command=self.query_printout, width=90)
+        self.status_btn = ctk.CTkButton(power_row, text="status", command=self.query_status_handler, width=90)
         self.status_btn.pack(side="left", padx=6)
 
         # ===== output log =====
@@ -331,17 +326,20 @@ class PowerSupplyGUI(ctk.CTk):
         except Exception as e:
             messagebox.showerror("set power failed", str(e))
 
-    def query_printout(self) -> None:
+    def query_status_handler(self) -> None:
         """
-        call the status helper and log output.
+        call psu.query_status() and print/log the dict.
         """
         if not self.ensure_connected():
             return
         try:
-            resp = self.psu.query_status()
-            self.log(f"> FS\n< {resp}")
+            data = self.psu.query_status()
+            # self.log("> FS")
+            for k, v in data.items():
+                self.log(f"{k}: {v}")
         except Exception as e:
-            messagebox.showerror("status failed", str(e))
+            from tkinter import messagebox
+            messagebox.showerror("query status failed", str(e))
 
     def on_close(self) -> None:
         """
