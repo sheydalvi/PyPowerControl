@@ -32,6 +32,7 @@ class PowerSupplyGUI(ctk.CTk):
     top-level application window that owns ui widgets and a communicator.
     """
     # inside PowerSupplyGUI
+
     def _set_busy(self, busy: bool) -> None:
         """
         show a wait cursor while busy; when done, restore hand cursor on buttons.
@@ -169,7 +170,7 @@ class PowerSupplyGUI(ctk.CTk):
         self.set_btn = ctk.CTkButton(power_row, text="set", command=self.set_power, width=80)
         self.set_btn.pack(side="left", padx=6)
 
-        self.status_btn = ctk.CTkButton(power_row, text="status", command=self.query_status, width=90)
+        self.status_btn = ctk.CTkButton(power_row, text="status", command=self.query_printout, width=90)
         self.status_btn.pack(side="left", padx=6)
 
         # ===== output log =====
@@ -253,7 +254,7 @@ class PowerSupplyGUI(ctk.CTk):
 
         try:
             # use whatever attribute names you chose
-            baud = getattr(self.psu, "baud_rate", getattr(self.psu, "baudrate", 9600))
+            baud = getattr(self.psu, "baudrate", 9600)
             timeout = getattr(self.psu, "timeout", 2)
 
             # call your existing finder directly (blocking)
@@ -330,7 +331,7 @@ class PowerSupplyGUI(ctk.CTk):
         except Exception as e:
             messagebox.showerror("set power failed", str(e))
 
-    def query_status(self) -> None:
+    def query_printout(self) -> None:
         """
         call the status helper and log output.
         """

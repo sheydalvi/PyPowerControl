@@ -5,13 +5,53 @@ import time
 from serial.tools import list_ports
 from typing import List, Optional, Tuple
 
+def _parse_status_block(text: str) -> dict:
+    """
+    parse the device status reply into a dict.
+    - trims junk (nulls), keeps only lines between 'start' and 'end'
+    - keeps keys exactly as reported by the device
+    - converts numeric values (int/float) where possible
+    """
+    clean = text.replace("\x00", "")
+    lines = [ln.strip() for ln in clean.splitlines() if ln.strip()]
+
+    inside = False
+    kv_pairs: list[tuple[str, str]] = []
+    for ln in lines:
+        up = ln.upper()
+        if up == "START":
+            inside = True
+            continue
+        if up == "END":
+            break
+        if not inside:
+            continue
+        if "=" in ln:
+            k, v = ln.split("=", 1)
+            kv_pairs.append((k.strip(), v.strip()))
+
+    status: dict = {}
+    for k, v in kv_pairs:
+        # try to coerce values
+        try:
+            val = float(v)
+            if val.is_integer():
+                val = int(val)
+        except Exception:
+            try:
+                val = int(v)
+            except Exception:
+                val = v
+        status[k] = val
+
+    return status
+
 def list_available_ports() -> List[str]:
     """
     return a list of available serial port device names.
     """
     # all ui code should call this instead of accessing serial.tools.list_ports directly
     return [p.device for p in serial.tools.list_ports.comports()]
-
 
 def _clean_response(raw: bytes) -> str:
     """
@@ -27,43 +67,14 @@ def _clean_response(raw: bytes) -> str:
     text = text.replace("\x00", "")
     return text.strip()
 
-def find_device_port(
-    probe_command: str = "FS",
-    expected_token: Optional[str] = None,
-    read_timeout_s: float = 0.2,
-) -> Optional[str]:
-    """
-    scan ports and send a probe command (default 'fs') to find the right device.
-    if expected_token is provided, we only accept a port whose response contains it.
-    returns the matching port string or none.
-    """
-    for port in list_available_ports():
-        try:
-            with serial.Serial(port=port, baudrate=9600, timeout=read_timeout_s) as s:
-                # always send with newline here to match device parser
-                s.write((probe_command + "\n").encode("ascii"))
-                time.sleep(0.05)  # small settle
-                raw = s.read(1024)
-                resp = _clean_response(raw)
-                if not expected_token:
-                    # any non-empty response qualifies if no token is specified
-                    if resp:
-                        return port
-                else:
-                    if expected_token in resp:
-                        return port
-        except Exception:
-            # ignore errors and keep scanning others
-            continue
-    return None
-
-
 class PowerSupplyCommunicator:
     def __init__(self, baudrate=9600,  timeout: float = 0.05) -> None:
         # self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
         self._ser : Optional[serial.Serial] = None
+        self.last_status: dict | None = None
+
 
     def connect(self, port: str) -> None:
         self.disconnect()
@@ -87,44 +98,69 @@ class PowerSupplyCommunicator:
         payload = (cmd + "\n").encode("ascii")
         self._ser.reset_input_buffer()
         self._ser.write(payload)
+        self._ser.flush()
         # optional short wait for device to generate a reply
         if wait_s > 0:
             time.sleep(wait_s)
         raw = self._ser.read(1024)
         return _clean_response(raw)
+        
+    def query_status(self) -> dict:
+        """
+        send 'fs' to the device and read until 'END', then parse into a dict.
+        """
+        if not self._ser or not self.is_connected():
+            raise ConnectionError("serial port not connected")
+        assert self._ser is not None
 
-def find_com_port_by_sn(target_serial, baudrate=9600, timeout=2):
-    ports = list_ports.comports()
-    print(f"Scanning ports for device with serial: {target_serial}")
+        self._ser.reset_input_buffer()
+        self._ser.reset_output_buffer()
+        self._ser.write(b"FS\n")
+        self._ser.flush()
 
-    for port in ports:
-        print(f"\n--- Probing {port.device} ---")
+        # collect lines until we hit 'END' or timeout
+        lines: list[str] = []
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            line = self._ser.readline().decode(errors="ignore")
+            if not line:
+                break
+            lines.append(line)
+            if line.strip().upper() == "END":
+                break
+
+        raw = "".join(lines)
+        parsed = _parse_status_block(raw)
+        self.last_status = parsed
+        return parsed
+
+
+def find_com_port_by_sn(target_serial, baudrate: int = 9600, timeout: float = 2) -> str | None:
+    """
+    connect to each com port, call query_status() to read + parse once,
+    and match 'SERIAL NUMBER' to target_serial. sends no commands here directly.
+    """
+    psu = PowerSupplyCommunicator(baudrate=baudrate, timeout=timeout)
+
+    for p in list_ports.comports():
+        port = p.device
+        print(f"\n--- probing {port} ---")
         try:
-            ser = serial.Serial(port.device, baudrate, timeout=timeout)
-            time.sleep(1)  # allow device to initialize
-
-            ser.write(b"FS\n")
-            time.sleep(0.5)
-            response = ser.read_all().decode(errors='ignore')
-            ser.close()
-            print(f"Raw response from {port.device}:\n{response!r}")
-
-
-            for line in response.splitlines():
-                if "SERIAL NUMBER=" in line:
-                    print(f"Found serial line: {line}")
-                    serial_value = line.split("=")[-1].strip()
-                    print(f"Extracted serial number: {serial_value}")
-                    if serial_value == target_serial:
-                        print(f" Match found on port {port.device}")
-                        return port.device
-                    else:
-                        print(f"Serial number mismatch (expected {target_serial})")
-
+            psu.connect(port)
+            # query_status sends 'fs' internally via send_command
+            data = psu.query_status()
+            sn = data.get("SERIAL NUMBER")
+            print(f"status: {data}")
+            if sn is not None and str(sn).strip() == str(target_serial).strip():
+                print(f"match found on {port}")
+                return port
         except Exception as e:
-            print(f"Error probing {port.device}: {e}")
-            continue
-    return None
+            print(f"probe error on {port}: {e}")
+        finally:
+            # release the port before trying the next one
+            try:
+                psu.disconnect()
+            except Exception:
+                pass
 
-def query_status(self) -> str:
-    return self.send_command("FS")
+    return None
