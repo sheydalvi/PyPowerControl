@@ -29,6 +29,7 @@ class PowerSupplyGUI(ctk.CTk):
     """
     # inside PowerSupplyGUI
 
+
     def _set_busy(self, busy: bool) -> None:
         """
         show a wait cursor while busy; when done, restore hand cursor on buttons.
@@ -76,7 +77,8 @@ class PowerSupplyGUI(ctk.CTk):
 
         # communicator (hardware driver)
         self.psu = PowerSupplyCommunicator()
-
+        # prevents sending commands when we flip switches programmatically
+        self._syncing_from_status = False
         # ===== top bar: port selection and connect/disconnect =====
         auto_row = ctk.CTkFrame(self)
         auto_row.pack(fill="x", padx=12, pady=(0, 8))
@@ -88,6 +90,13 @@ class PowerSupplyGUI(ctk.CTk):
 
         self.auto_btn = ctk.CTkButton(auto_row, text="auto connect", command=self.auto_connect, width=120)
         self.auto_btn.pack(side="left", padx=8)
+
+        
+        self.start_auto_btn = ctk.CTkButton(auto_row, text="start auto-query", command=self.start_auto_query, width=120)
+        self.start_auto_btn.pack(side="left", padx=6)
+
+        self.stop_auto_btn = ctk.CTkButton(auto_row, text="stop auto-query", command=self.stop_auto_query, width=120)
+        self.stop_auto_btn.pack(side="left", padx=6)
 
 
         top = ctk.CTkFrame(self)
@@ -115,8 +124,7 @@ class PowerSupplyGUI(ctk.CTk):
 
         self.disconnect_btn = ctk.CTkButton(top, text="disconnect", command=self.disconnect, width=100)
         self.disconnect_btn.pack(side="left", padx=6)
-
-        
+ 
 
         # ===== switches row =====
         switch_row = ctk.CTkFrame(self)
@@ -168,6 +176,7 @@ class PowerSupplyGUI(ctk.CTk):
         self.status_btn = ctk.CTkButton(power_row, text="status", command=self.query_status_handler, width=90)
         self.status_btn.pack(side="left", padx=6)
 
+
         # ===== output log =====
         out_frame = ctk.CTkFrame(self)
         out_frame.pack(fill="both", expand=True, padx=12, pady=10)
@@ -182,6 +191,40 @@ class PowerSupplyGUI(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     # ===== ui helpers =====
+
+    def start_auto_query(self) -> None:
+        # start periodic queries once every second
+        self._auto_query_running = True
+        self._auto_query_loop()
+
+    def stop_auto_query(self) -> None:
+        # stop the periodic queries
+        self._auto_query_running = False
+
+    def _auto_query_loop(self) -> None:
+        """
+        internal loop: call query_status and schedule next run.
+        """
+        if not getattr(self, "_auto_query_running", False):
+            return
+        if not self.ensure_connected():
+            # if not connected, stop auto-query
+            self._auto_query_running = False
+            return
+        try:
+            data = self.psu.query_status()
+            # self.log("> FS (auto)")
+            # for k, v in data.items():
+                # self.log(f"{k}: {v}")
+            # keep switches in sync with device
+            self._apply_status_to_switches(data)
+        except Exception as e:
+            messagebox.showerror("auto query error", str(e))
+            self._auto_query_running = False
+            return
+
+        # schedule next run in 1000 ms
+        self.after(1000, self._auto_query_loop)
 
     def log(self, text: str) -> None:
         """
@@ -230,6 +273,8 @@ class PowerSupplyGUI(ctk.CTk):
         try:
             self.psu.connect(port)
             self.log(f"connected to {port}")
+            # start auto-query by default
+            self.start_auto_query()
         except Exception as e:
             messagebox.showerror("connect failed", str(e))
 
@@ -263,6 +308,8 @@ class PowerSupplyGUI(ctk.CTk):
             self.psu.connect(port)
             self.port_var.set(port)
             self.log(f"auto connect: connected to {port}")
+            self.start_auto_query()
+
 
         except Exception as e:
             from tkinter import messagebox
@@ -296,18 +343,46 @@ class PowerSupplyGUI(ctk.CTk):
         convert a switch state into a device command using the centralized map.
         newline is handled inside serial_comm.send_command.
         """
+        # if we are syncing from device status, do not send a command
+        if getattr(self, "_syncing_from_status", False):
+            return
+
         if not self.ensure_connected():
             # revert ui state if not connected
             var.set(not var.get())
             return
         try:
             cmd = command_for(name, var.get())
-            resp = self.psu.send_command(cmd)
+            resp = self.psu.send_command(cmd, wait_s=0.0)
             self.log(f"> {cmd}\n< {resp}")
         except Exception as e:
             # revert ui state on error
             var.set(not var.get())
             messagebox.showerror("command failed", str(e))
+
+    def _apply_status_to_switches(self, status: dict) -> None:
+        """
+        set ui switches based on device status without firing commands.
+        device labels are used as-is: 'COOL', 'LAMP', 'SHUTTER' (0/1).
+        """
+        def as_bool(val):
+            try:
+                return bool(int(val))
+            except Exception:
+                return False
+
+        # start guarded section: flips won't trigger handle_switch
+        self._syncing_from_status = True
+        try:
+            if "COOL" in status:
+                self.fan_var.set(as_bool(status["COOL"]))
+            if "LAMP" in status:
+                self.lamp_var.set(as_bool(status["LAMP"]))
+            if "SHUTTER" in status:
+                self.shutter_var.set(as_bool(status["SHUTTER"]))
+        finally:
+            self._syncing_from_status = False
+
 
     def set_power(self) -> None:
         """
@@ -327,9 +402,6 @@ class PowerSupplyGUI(ctk.CTk):
             messagebox.showerror("set power failed", str(e))
 
     def query_status_handler(self) -> None:
-        """
-        call psu.query_status() and print/log the dict.
-        """
         if not self.ensure_connected():
             return
         try:
@@ -337,6 +409,8 @@ class PowerSupplyGUI(ctk.CTk):
             # self.log("> FS")
             for k, v in data.items():
                 self.log(f"{k}: {v}")
+            # reflect device state on switches
+            self._apply_status_to_switches(data)
         except Exception as e:
             from tkinter import messagebox
             messagebox.showerror("query status failed", str(e))
