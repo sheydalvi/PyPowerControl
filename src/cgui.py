@@ -4,6 +4,7 @@ import customtkinter as ctk
 from tkinter import messagebox
 import tkinter as tk
 from src.serial_comm import PowerSupplyCommunicator, list_available_ports, find_com_port_by_sn
+import time
 
 ctk.set_appearance_mode("System")  # options: "system", "dark", "light"
 ctk.set_default_color_theme("blue")  # you can change this to "green", "dark-blue", etc.
@@ -202,29 +203,24 @@ class PowerSupplyGUI(ctk.CTk):
         self._auto_query_running = False
 
     def _auto_query_loop(self) -> None:
-        """
-        internal loop: call query_status and schedule next run.
-        """
         if not getattr(self, "_auto_query_running", False):
             return
         if not self.ensure_connected():
-            # if not connected, stop auto-query
             self._auto_query_running = False
             return
         try:
+            t0 = time.monotonic()
             data = self.psu.query_status()
-            # self.log("> FS (auto)")
-            # for k, v in data.items():
-                # self.log(f"{k}: {v}")
-            # keep switches in sync with device
-            self._apply_status_to_switches(data)
+            dt = (time.monotonic() - t0) * 1000
+            self.log(f"FS reply in {dt:.1f} ms: {data}")
+            if data:
+                self._apply_status_to_switches(data)
         except Exception as e:
             messagebox.showerror("auto query error", str(e))
             self._auto_query_running = False
             return
-
-        # schedule next run in 1000 ms
         self.after(1000, self._auto_query_loop)
+
 
     def log(self, text: str) -> None:
         """
@@ -338,27 +334,90 @@ class PowerSupplyGUI(ctk.CTk):
             return False
         return True
 
+    def _confirm_then_resume(self, name: str, var: tk.BooleanVar, desired: bool,
+                            status_key: str, was_running: bool) -> None:
+        # retry a few quick confirms so we don't revert on a stale read
+        # total confirm window ~ 350–450 ms which still feels instant to the user
+        try:
+            def as_bool(v):
+                try:
+                    return bool(int(v))
+                except Exception:
+                    return bool(v)
+
+            attempts = 1          # number of confirm reads
+            spacing_ms = 0      # delay between reads
+            success = False
+            last_actual = None
+
+            for i in range(attempts):
+                data = self.psu.query_status()
+                actual = as_bool(data.get(status_key))
+                last_actual = actual
+
+                # log once for visibility
+                if i == 0:
+                    self.log(f"confirm {status_key}={int(actual)}")
+
+                if actual == desired:
+                    # device reached requested state within the grace window
+                    self._apply_status_to_switches(data)
+                    success = True
+                    break
+
+                # not yet matched, wait a bit and try again
+                self.update_idletasks()
+                self.after(spacing_ms)
+                self.update_idletasks()
+
+            if not success:
+                # after grace window it still disagrees, revert immediately
+                self._syncing_from_status = True
+                try:
+                    var.set(last_actual if last_actual is not None else not desired)
+                finally:
+                    self._syncing_from_status = False
+
+        except Exception:
+            # on any read error, fail fast and revert so ui never lingers wrong
+            var.set(not desired)
+
+        finally:
+            if was_running:
+                self.after(0, self.start_auto_query)
+
+    
     def handle_switch(self, name: str, var: tk.BooleanVar) -> None:
-        """
-        convert a switch state into a device command using the centralized map.
-        newline is handled inside serial_comm.send_command.
-        """
-        # if we are syncing from device status, do not send a command
         if getattr(self, "_syncing_from_status", False):
             return
 
         if not self.ensure_connected():
-            # revert ui state if not connected
             var.set(not var.get())
             return
+
+        desired = var.get()
+        key_map = {"fan": "COOL", "lamp": "LAMP", "shutter": "SHUTTER"}
+        status_key = key_map.get(name, name.upper())
+
+        was_running = getattr(self, "_auto_query_running", False)
+        self._auto_query_running = False
+
         try:
-            cmd = command_for(name, var.get())
-            resp = self.psu.send_command(cmd, wait_s=0.0)
-            self.log(f"> {cmd}\n< {resp}")
+            cmd = command_for(name, desired)
+            self.psu.send_command(cmd, wait_s=0.06)
+            self.log(f"> {cmd}")
         except Exception as e:
-            # revert ui state on error
-            var.set(not var.get())
+            var.set(not desired)
             messagebox.showerror("command failed", str(e))
+            if was_running:
+                self.after(0, self.start_auto_query)
+            return
+
+        # schedule the confirm via helper
+        self.after(320, lambda: self._confirm_then_resume(name, var, desired, status_key, was_running))
+
+
+
 
     def _apply_status_to_switches(self, status: dict) -> None:
         """

@@ -100,26 +100,59 @@ class PowerSupplyCommunicator:
 
         self._ser.reset_input_buffer()
         self._ser.reset_output_buffer()
-        self._ser.write(b"FS\n")
+        self._ser.write(b"FS\r\n")
         self._ser.flush()
+
+        """
+        make the port timeout very short so each read only waits a tiny bit
+        if nothing comes, we quickly try again until we see the END line
+        or until our overall timer runs out. this prevents the program from
+        freezing for seconds if the device is slow, then we put the old timeout back
+        """
+
+        # an overall budget a bit above my full-frame time (I observed ~180–220 ms)
+        overall_budget_s = 0.40  # 400 ms is snappy but tolerant
+        deadline = time.monotonic() + overall_budget_s
+
+        # temporarily shorten serial timeouts so readline() can't block for seconds
+        orig_timeout = self._ser.timeout
+        orig_ib_to = getattr(self._ser, "inter_byte_timeout", None)
 
         # collect lines until we hit 'END' or timeout
         lines: list[str] = []
-        deadline = time.monotonic() + 1.0
-        while time.monotonic() < deadline:
-            line = self._ser.readline().decode(errors="ignore")
-            if not line:
-                break
-            lines.append(line)
-            if line.strip().upper() == "END":
-                break
+        try:
+            # per-line read timeout; keep very small so the while-loop cadence controls total time
+            self._ser.timeout = 0.06
+            try:
+                self._ser.inter_byte_timeout = 0.02  # type: ignore[attr-defined]
+            except Exception:
+                pass
 
-        raw = "".join(lines)
-        parsed = _parse_status_block(raw)
+            while time.monotonic() < deadline:
+                raw = self._ser.readline()
+                if not raw:
+                    # no line yet: keep looping until overall deadline
+                    continue
+                line = raw.decode(errors="ignore")
+                lines.append(line)
+                if line.strip().upper() == "END":
+                    break
+
+        finally:
+            # restore original timeouts
+            self._ser.timeout = orig_timeout
+            try:
+                if orig_ib_to is not None:
+                    self._ser.inter_byte_timeout = orig_ib_to  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+        raw_text = "".join(lines)
+        parsed = _parse_status_block(raw_text)
         self.last_status = parsed
         return parsed
 
-def find_com_port_by_sn(target_serial, baudrate: int = 9600, timeout: float = 2) -> str | None:
+def find_com_port_by_sn(target_serial, baudrate: int = 9600, timeout: float = 1.5) -> str | None:
     """
     connect to each com port, call query_status() to read + parse once,
     and match 'SERIAL NUMBER' to target_serial. sends no commands here directly.
