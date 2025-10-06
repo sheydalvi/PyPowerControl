@@ -81,7 +81,7 @@ class PowerSupplyCommunicator:
             raise ConnectionError("serial port not connected")
         assert self._ser is not None
         # always append newline here so callers don't have to remember
-        payload = (cmd + "\n").encode("ascii")
+        payload = (cmd + "\r\n").encode("ascii")
         self._ser.reset_input_buffer()
         self._ser.write(payload)
         self._ser.flush()
@@ -89,6 +89,25 @@ class PowerSupplyCommunicator:
         if wait_s > 0:
             time.sleep(wait_s)
         return None
+    
+
+    # add inside class PowerSupplyCommunicator in src/serial_comm.py
+    def set_power(self, value: int) -> str:
+        # clamp to device range 0700..1050
+        if value < 700:
+            value = 700
+        elif value > 1050:
+            value = 1050
+
+        if not self.is_connected():
+            raise ConnectionError("serial port not connected")
+
+        # many supplies expect zero-padded 4-digit power command like P1234
+        # if your device requires 'P=1234' instead, change the next line accordingly
+        cmd = f"P={value:04d}"
+        self.send_command(cmd, wait_s=0.08)  # brief wait so device can act
+        return "OK"
+
         
     def query_status(self) -> dict:
         """

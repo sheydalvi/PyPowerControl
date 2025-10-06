@@ -164,7 +164,7 @@ class PowerSupplyGUI(ctk.CTk):
         power_row = ctk.CTkFrame(self)
         power_row.pack(fill="x", padx=12, pady=8)
 
-        self.power_label = ctk.CTkLabel(power_row, text="power (0–9999)")
+        self.power_label = ctk.CTkLabel(power_row, text="power (0–1050)")
         self.power_label.pack(side="left", padx=(8, 6))
 
         self.power_var = tk.StringVar(value="0")
