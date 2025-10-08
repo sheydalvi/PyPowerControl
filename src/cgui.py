@@ -80,9 +80,12 @@ class PowerSupplyGUI(ctk.CTk):
         self.psu = PowerSupplyCommunicator()
         # prevents sending commands when we flip switches programmatically
         self._syncing_from_status = False
+        # monotonic timestamp until which auto-query should not run
+        self._busy_until = 0.0 
         # ===== top bar: port selection and connect/disconnect =====
         auto_row = ctk.CTkFrame(self)
         auto_row.pack(fill="x", padx=12, pady=(0, 8))
+        
 
         ctk.CTkLabel(auto_row, text="device serial").pack(side="left", padx=(8, 6))
         self.serial_var = tk.StringVar(value="")
@@ -205,6 +208,10 @@ class PowerSupplyGUI(ctk.CTk):
     def _auto_query_loop(self) -> None:
         if not getattr(self, "_auto_query_running", False):
             return
+            # skip polling during command quiet windows
+        if time.monotonic() < getattr(self, "_busy_until", 0.0):
+            self.after(50, self._auto_query_loop)  # check again soon
+            return
         if not self.ensure_connected():
             self._auto_query_running = False
             return
@@ -220,6 +227,35 @@ class PowerSupplyGUI(ctk.CTk):
             self._auto_query_running = False
             return
         self.after(1000, self._auto_query_loop)
+    
+    def pause_auto_query(self, ms: int):
+        was_running = getattr(self, "_auto_query_running", False)
+        self._auto_query_running = False
+        if was_running:
+            # resume and immediately restart loop after delay
+            self.after(ms, lambda: [setattr(self, "_auto_query_running", True), self._auto_query_loop()])
+    def _quiesce_for(self, ms: int) -> None:
+        # block auto-query until now + ms
+        t = time.monotonic() + (ms / 1000.0)
+        self._busy_until = max(self._busy_until, t)
+
+    def _device_key_for(self, name: str) -> str:
+        return {"fan": "COOL", "lamp": "LAMP", "shutter": "SHUTTER"}[name]
+
+    def _await_status(self, key: str, target: int, timeout_s: float = 1.5, poll_s: float = 0.12) -> bool:
+        # poll FS until key == target or timeout
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            data = self.psu.query_status()
+            val = int(data.get(key, -1)) if data else -1
+            if val == target:
+                # reflect to switches once confirmed
+                self._apply_status_to_switches(data)
+                return True
+            time.sleep(poll_s)
+        return False
+
+
 
 
     def log(self, text: str) -> None:
@@ -333,59 +369,6 @@ class PowerSupplyGUI(ctk.CTk):
             messagebox.showwarning("not connected", "please connect to a port first")
             return False
         return True
-
-    def _confirm_then_resume(self, name: str, var: tk.BooleanVar, desired: bool,
-                            status_key: str, was_running: bool) -> None:
-        # retry a few quick confirms so we don't revert on a stale read
-        # total confirm window ~ 350–450 ms which still feels instant to the user
-        try:
-            def as_bool(v):
-                try:
-                    return bool(int(v))
-                except Exception:
-                    return bool(v)
-
-            attempts = 1          # number of confirm reads
-            spacing_ms = 0      # delay between reads
-            success = False
-            last_actual = None
-
-            for i in range(attempts):
-                data = self.psu.query_status()
-                actual = as_bool(data.get(status_key))
-                last_actual = actual
-
-                # log once for visibility
-                if i == 0:
-                    self.log(f"confirm {status_key}={int(actual)}")
-
-                if actual == desired:
-                    # device reached requested state within the grace window
-                    self._apply_status_to_switches(data)
-                    success = True
-                    break
-
-                # not yet matched, wait a bit and try again
-                self.update_idletasks()
-                self.after(spacing_ms)
-                self.update_idletasks()
-
-            if not success:
-                # after grace window it still disagrees, revert immediately
-                self._syncing_from_status = True
-                try:
-                    var.set(last_actual if last_actual is not None else not desired)
-                finally:
-                    self._syncing_from_status = False
-
-        except Exception:
-            # on any read error, fail fast and revert so ui never lingers wrong
-            var.set(not desired)
-
-        finally:
-            if was_running:
-                self.after(0, self.start_auto_query)
-
     
     def handle_switch(self, name: str, var: tk.BooleanVar) -> None:
         if getattr(self, "_syncing_from_status", False):
@@ -396,27 +379,37 @@ class PowerSupplyGUI(ctk.CTk):
             return
 
         desired = var.get()
-        key_map = {"fan": "COOL", "lamp": "LAMP", "shutter": "SHUTTER"}
-        status_key = key_map.get(name, name.upper())
-
-        was_running = getattr(self, "_auto_query_running", False)
-        self._auto_query_running = False
 
         try:
             cmd = command_for(name, desired)
-            self.psu.send_command(cmd, wait_s=0.06)
+            self._quiesce_for(1500)
+            self.psu.send_command(cmd, wait_s=0.12, post_quiet_s=0.5)
             self.log(f"> {cmd}")
+            # confirm via FS once before auto-query resumes normal cadence
+            key = self._device_key_for(name)
+            target = 1 if desired else 0
+
+            # while we are confirming, prevent UI flips from stale reads
+            self._syncing_from_status = True
+            ok = self._await_status(key, target, timeout_s=1.5, poll_s=0.12)
+            if not ok:
+                # revert local UI if device didn’t take the command
+                var.set(not desired)
+                self.log(f"[warn] {key} did not reach {target} within timeout")
+
+            
         except Exception as e:
-            var.set(not desired)
+            # on any exception, revert and show a *real* error dialog
+            try:
+                var.set(not desired)
+            except Exception:
+                pass
+            self.log(f"[error] {e}")
             messagebox.showerror("command failed", str(e))
-            if was_running:
-                self.after(0, self.start_auto_query)
             return
-
-        # schedule the confirm via helper
-        self.after(320, lambda: self._confirm_then_resume(name, var, desired, status_key, was_running))
-
-
+        
+        finally:
+            self._syncing_from_status = False
 
 
     def _apply_status_to_switches(self, status: dict) -> None:

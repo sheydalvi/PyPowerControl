@@ -4,6 +4,7 @@ import serial
 import time
 from serial.tools import list_ports
 from typing import List, Optional, Tuple
+import threading
 
 def _parse_status_block(text: str) -> dict:
     """
@@ -60,6 +61,10 @@ class PowerSupplyCommunicator:
         self.timeout = timeout
         self._ser : Optional[serial.Serial] = None
         self.last_status: dict | None = None
+        self._io_lock = threading.Lock()
+        self.CMD_PROC_WAIT    = 0.10  # per-command processing delay
+        self.GAP_POST_COMMAND = 0.25  # seconds after sending any command before next TX
+        self.GAP_PRE_FROM_FS  = 0.18  # seconds before sending a command after FS
 
 
     def connect(self, port: str) -> None:
@@ -76,20 +81,45 @@ class PowerSupplyCommunicator:
     def is_connected(self) -> bool:
         return bool(self._ser and self._ser.is_open)
 
-    def send_command(self, cmd: str, wait_s: float = 0.05) -> str:
+
+    def send_command(
+        self,
+        cmd: str,
+        wait_s: float | None = None,
+        post_quiet_s: float | None = None,
+        pre_gap_from_rx_s: float | None = None) -> None:
+        # fill per-instance defaults
+        if wait_s is None:
+            wait_s = self.CMD_PROC_WAIT
+        if post_quiet_s is None:
+            post_quiet_s = self.GAP_POST_COMMAND
+        if pre_gap_from_rx_s is None:
+            pre_gap_from_rx_s = self.GAP_PRE_FROM_FS
+
         if not self._ser or not self.is_connected():
             raise ConnectionError("serial port not connected")
-        assert self._ser is not None
-        # always append newline here so callers don't have to remember
+
         payload = (cmd + "\r\n").encode("ascii")
-        self._ser.reset_input_buffer()
-        self._ser.write(payload)
-        self._ser.flush()
-        # optional short wait for device to generate a reply
-        if wait_s > 0:
-            time.sleep(wait_s)
-        return None
-    
+        with self._io_lock:
+            # gap from last FS read completion
+            gap = time.monotonic() - getattr(self, "last_rx_time", 0.0)
+            if gap < pre_gap_from_rx_s:
+                time.sleep(pre_gap_from_rx_s - gap)
+
+            n = self._ser.write(payload)
+            self._ser.flush()
+            if n != len(payload):
+                raise IOError(f"short write: {n}/{len(payload)} bytes")
+
+            self.last_tx_cmd = cmd
+            self.last_tx_time = time.monotonic()
+
+            if wait_s > 0:
+                time.sleep(wait_s)
+
+            if post_quiet_s > 0:
+                time.sleep(post_quiet_s)
+            
 
     # add inside class PowerSupplyCommunicator in src/serial_comm.py
     def set_power(self, value: int) -> str:
@@ -117,10 +147,10 @@ class PowerSupplyCommunicator:
             raise ConnectionError("serial port not connected")
         assert self._ser is not None
 
-        self._ser.reset_input_buffer()
-        self._ser.reset_output_buffer()
-        self._ser.write(b"FS\r\n")
-        self._ser.flush()
+        # self._ser.reset_input_buffer()
+        # self._ser.reset_output_buffer()
+        # self._ser.write(b"FS\r\n")
+        # self._ser.flush()
 
         """
         make the port timeout very short so each read only waits a tiny bit
@@ -130,7 +160,7 @@ class PowerSupplyCommunicator:
         """
 
         # an overall budget a bit above my full-frame time (I observed ~180–220 ms)
-        overall_budget_s = 0.40  # 400 ms is snappy but tolerant
+        overall_budget_s = 0.50  # 400 ms is snappy but tolerant
         deadline = time.monotonic() + overall_budget_s
 
         # temporarily shorten serial timeouts so readline() can't block for seconds
@@ -139,36 +169,51 @@ class PowerSupplyCommunicator:
 
         # collect lines until we hit 'END' or timeout
         lines: list[str] = []
-        try:
-            # per-line read timeout; keep very small so the while-loop cadence controls total time
-            self._ser.timeout = 0.06
-            try:
-                self._ser.inter_byte_timeout = 0.02  # type: ignore[attr-defined]
-            except Exception:
-                pass
+        saw_start = False
+        saw_end = False
 
-            while time.monotonic() < deadline:
-                raw = self._ser.readline()
-                if not raw:
-                    # no line yet: keep looping until overall deadline
-                    continue
-                line = raw.decode(errors="ignore")
-                lines.append(line)
-                if line.strip().upper() == "END":
-                    break
+        # take the lock for the full FS write+read
+        with self._io_lock:
+            # don’t throw away data from the device right before we ask for FS
+            # (comment out the next line if your device *needs* a purge)
+            # self._ser.reset_input_buffer()
 
-        finally:
-            # restore original timeouts
-            self._ser.timeout = orig_timeout
+            self._ser.write(b"FS\r\n")
+            self._ser.flush()
+
             try:
-                if orig_ib_to is not None:
-                    self._ser.inter_byte_timeout = orig_ib_to  # type: ignore[attr-defined]
-            except Exception:
-                pass
+                self._ser.timeout = 0.08
+                try:
+                    self._ser.inter_byte_timeout = 0.03  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+
+                while time.monotonic() < deadline:
+                    raw = self._ser.readline()
+                    if not raw:
+                        continue
+                    line = raw.decode(errors="ignore")
+                    up = line.strip().upper()
+                    if up == "START":
+                        saw_start = True
+                    elif up == "END":
+                        saw_end = True
+                        lines.append(line)
+                        break
+                    lines.append(line)
+            finally:
+                self._ser.timeout = orig_timeout
+                try:
+                    if orig_ib_to is not None:
+                        self._ser.inter_byte_timeout = orig_ib_to  # type: ignore[attr-defined]
+                except Exception:
+                    pass
 
         raw_text = "".join(lines)
         parsed = _parse_status_block(raw_text)
+        parsed["_FRAME_COMPLETE"] = bool(saw_start and saw_end)
         self.last_status = parsed
+        self.last_rx_time = time.monotonic()  # finished consuming FS frame
         return parsed
 
 def find_com_port_by_sn(target_serial, baudrate: int = 9600, timeout: float = 1.5) -> str | None:
