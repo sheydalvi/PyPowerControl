@@ -32,9 +32,7 @@ def read_config(filename="config.json"):
         print(f"File not found: {filepath}")
     return {}
 config = read_config("config.json")
-print
-# print(os.path.abspath("config.json"))
-# print(os.path.exists("config.json"))
+
 
 def command_for(name: str, state_on: bool) -> str:
     """
@@ -199,7 +197,14 @@ class PowerSupplyGUI(ctk.CTk):
 
         self.power_vardigit = tk.StringVar(value="0")
         self.power_entry = ctk.CTkEntry(power_row, textvariable=self.power_vardigit, width=90)
+        self.power_entry.bind("<Return>", self._on_power_edit_end)
         self.power_entry.pack(side="left", padx=6)
+
+        self._editing_power = False
+        self.power_entry.bind("<FocusIn>", self._on_power_edit_start)
+        self.power_entry.bind("<FocusOut>", self._on_power_edit_end)
+        self.power_entry.bind("<Return>", self._on_power_commit) 
+
 
         self.set_btn = ctk.CTkButton(power_row, text="set", command=self.set_power, width=80)
         self.set_btn.pack(side="left", padx=6)
@@ -270,17 +275,17 @@ class PowerSupplyGUI(ctk.CTk):
             t0 = time.monotonic()
             data = self.psu.query_status()
 
-            if data:
-                def safe_float(value, default=0.0):
-                    try:
-                        return float(value)
-                    except (TypeError, ValueError):
-                        return default
+            # if data:
+                # def safe_float(value, default=0.0):
+                #     try:
+                #         return float(value)
+                #     except (TypeError, ValueError):
+                #         return default
 
-                self.voltage_var.set(f"{safe_float(data.get('VOLTAGE'))/10:.2f} V")
-                self.current_var.set(f"{safe_float(data.get('CURRENT')):.2f} A")
+                # self.voltage_var.set(f"{safe_float(data.get('VOLTAGE'))/config["LampVoltageFactor"]:.2f} V")
+                # self.current_var.set(f"{safe_float(data.get('CURRENT'))/config["LampCurrentFactor"]:.2f} A")
                 # self.current_var.set(f"{data.get('CURRENT'):.2f} A")
-                self.power_var.set(f"{safe_float(data.get('POWER'))/1000000:.1f} W") 
+                # self.power_var.set(f"{safe_float(data.get('POWER'))/config["LampPowerFactor"]:.1f} W") 
 
             dt = (time.monotonic() - t0) * 1000
             self.log(f"FS reply in {dt:.1f} ms: {data}")
@@ -486,6 +491,12 @@ class PowerSupplyGUI(ctk.CTk):
                 return bool(int(val))
             except Exception:
                 return False
+            
+        def as_float(val, default=0.0):
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                return default
 
         # start guarded section: flips won't trigger handle_switch
         self._syncing_from_status = True
@@ -496,6 +507,25 @@ class PowerSupplyGUI(ctk.CTk):
                 self.lamp_var.set(as_bool(status["LAMP"]))
             if "SHUTTER" in status:
                 self.shutter_var.set(as_bool(status["SHUTTER"]))
+            
+            # --- live numeric readouts ---
+            if "VOLTAGE" in status:
+                voltage = as_float(status["VOLTAGE"])/config["LampVoltageFactor"]
+                self.voltage_var.set(f"{voltage:.2f} V")
+
+            if "CURRENT" in status:
+                current = as_float(status["CURRENT"])/config["LampCurrentFactor"]
+                self.current_var.set(f"{current:.3f} A")
+
+            if "POWER" in status:
+                power_raw = as_float(status["POWER"])/config["LampPowerFactor"]
+                self.power_var.set(f"{power_raw:.1f} W")
+
+            if "OUTPUT" in status:
+                output = as_float(status["OUTPUT"])/10
+                # also update the editable power entry if user isn't typing
+                if not getattr(self, "_editing_power", False):
+                    self.power_vardigit.set(f"{output:.1f}")
         finally:
             self._syncing_from_status = False
 
@@ -509,13 +539,15 @@ class PowerSupplyGUI(ctk.CTk):
         try:
             # reads decimal value
             user_value = float(self.power_vardigit.get())
+            user_value = max(config["MinimumOutput"], min(user_value, config["MaximumOutput"]))
+
             scaled_value = int(user_value * 10)  
         except ValueError:
             messagebox.showwarning("Invalid power", "Enter a number between 70.0 and 105.0")
             return
 
         # limits
-        scaled_value = max(700, min(scaled_value, 1050))
+        # scaled_value = max(config["MinimumOutput"], min(scaled_value, config["MaximumOutput"]))
 
         try:
             resp = self.psu.set_power(scaled_value)
@@ -545,3 +577,17 @@ class PowerSupplyGUI(ctk.CTk):
             self.psu.disconnect()
         finally:
             self.destroy()
+
+    def _on_power_edit_start(self, event=None):
+        """User started editing power manually."""
+        self._editing_power = True
+
+    def _on_power_edit_end(self, event=None):
+        """User left the power field (focus lost)."""
+        self._editing_power = False
+
+    def _on_power_commit(self, event=None):
+        """User pressed Enter — commit edit and set power."""
+        self._editing_power = False
+        self.focus()  # remove focus from entry
+        self.set_power()  # same as clicking the button
