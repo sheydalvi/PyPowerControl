@@ -5,6 +5,8 @@ from tkinter import messagebox
 import tkinter as tk
 from src.serial_comm import PowerSupplyCommunicator, list_available_ports, find_com_port_by_sn
 import time
+import json
+import os
 
 ctk.set_appearance_mode("System")  # options: "system", "dark", "light"
 ctk.set_default_color_theme("blue")  # you can change this to "green", "dark-blue", etc.
@@ -14,6 +16,25 @@ COMMANDS: Dict[str, tuple[str, str]] = {
     "shutter": ("S1", "S0"),
     "lamp": ("L1", "L0"),
 }
+
+def read_config(filename="config.json"):
+    """Read configuration from a JSON file and return as a dict."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    filepath = os.path.join(script_dir, filename)
+
+    if os.path.exists(filepath):
+        with open(filepath, "r", encoding="utf-8") as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                print("Error: config.json is not valid JSON.")
+    else:
+        print(f"File not found: {filepath}")
+    return {}
+config = read_config("config.json")
+print
+# print(os.path.abspath("config.json"))
+# print(os.path.exists("config.json"))
 
 def command_for(name: str, state_on: bool) -> str:
     """
@@ -85,12 +106,18 @@ class PowerSupplyGUI(ctk.CTk):
         # ===== top bar: port selection and connect/disconnect =====
         auto_row = ctk.CTkFrame(self)
         auto_row.pack(fill="x", padx=12, pady=(0, 8))
-        
 
+        print("Loaded configuration:", config)
         ctk.CTkLabel(auto_row, text="device serial").pack(side="left", padx=(8, 6))
-        self.serial_var = tk.StringVar(value="")
+        # self.serial_var = tk.StringVar(value="")
+        # self.serial_entry = ctk.CTkEntry(auto_row, textvariable=self.serial_var, width=180)
+        # self.serial_entry.pack(side="left", padx=6)
+        self.serial_var = tk.StringVar(value=config["sn"])
+
         self.serial_entry = ctk.CTkEntry(auto_row, textvariable=self.serial_var, width=180)
         self.serial_entry.pack(side="left", padx=6)
+
+
 
         self.auto_btn = ctk.CTkButton(auto_row, text="auto connect", command=self.auto_connect, width=120)
         self.auto_btn.pack(side="left", padx=8)
@@ -167,11 +194,11 @@ class PowerSupplyGUI(ctk.CTk):
         power_row = ctk.CTkFrame(self)
         power_row.pack(fill="x", padx=12, pady=8)
 
-        self.power_label = ctk.CTkLabel(power_row, text="power (0–1050)")
+        self.power_label = ctk.CTkLabel(power_row, text="")
         self.power_label.pack(side="left", padx=(8, 6))
 
-        self.power_var = tk.StringVar(value="0")
-        self.power_entry = ctk.CTkEntry(power_row, textvariable=self.power_var, width=90)
+        self.power_vardigit = tk.StringVar(value="0")
+        self.power_entry = ctk.CTkEntry(power_row, textvariable=self.power_vardigit, width=90)
         self.power_entry.pack(side="left", padx=6)
 
         self.set_btn = ctk.CTkButton(power_row, text="set", command=self.set_power, width=80)
@@ -179,6 +206,30 @@ class PowerSupplyGUI(ctk.CTk):
 
         self.status_btn = ctk.CTkButton(power_row, text="status", command=self.query_status_handler, width=90)
         self.status_btn.pack(side="left", padx=6)
+
+        # ===== feedback =====
+        feedback_frame = ctk.CTkFrame(self)
+        feedback_frame.pack(fill="x", padx=12, pady=8)
+
+        # StringVars for live values
+        self.voltage_var = ctk.StringVar(value="0.00 V")
+        self.current_var = ctk.StringVar(value="0.00 A")
+        self.power_var   = ctk.StringVar(value="0.00 W")
+
+        # Column headers
+        ctk.CTkLabel(feedback_frame, text="Voltage", font=("Arial", 14, "bold")).grid(row=0, column=0, padx=10, pady=(0, 4))
+        ctk.CTkLabel(feedback_frame, text="Current", font=("Arial", 14, "bold")).grid(row=0, column=1, padx=10, pady=(0, 4))
+        ctk.CTkLabel(feedback_frame, text="Power", font=("Arial", 14, "bold")).grid(row=0, column=2, padx=10, pady=(0, 4))
+
+        # Live values
+        ctk.CTkLabel(feedback_frame, textvariable=self.voltage_var, font=("Consolas", 14)).grid(row=1, column=0, padx=10)
+        ctk.CTkLabel(feedback_frame, textvariable=self.current_var, font=("Consolas", 14)).grid(row=1, column=1, padx=10)
+        ctk.CTkLabel(feedback_frame, textvariable=self.power_var, font=("Consolas", 14)).grid(row=1, column=2, padx=10)
+
+        # Center and expand columns evenly
+        feedback_frame.grid_columnconfigure(0, weight=1)
+        feedback_frame.grid_columnconfigure(1, weight=1)
+        feedback_frame.grid_columnconfigure(2, weight=1)
 
 
         # ===== output log =====
@@ -218,6 +269,19 @@ class PowerSupplyGUI(ctk.CTk):
         try:
             t0 = time.monotonic()
             data = self.psu.query_status()
+
+            if data:
+                def safe_float(value, default=0.0):
+                    try:
+                        return float(value)
+                    except (TypeError, ValueError):
+                        return default
+
+                self.voltage_var.set(f"{safe_float(data.get('VOLTAGE'))/10:.2f} V")
+                self.current_var.set(f"{safe_float(data.get('CURRENT')):.2f} A")
+                # self.current_var.set(f"{data.get('CURRENT'):.2f} A")
+                self.power_var.set(f"{safe_float(data.get('POWER'))/1000000:.1f} W") 
+
             dt = (time.monotonic() - t0) * 1000
             self.log(f"FS reply in {dt:.1f} ms: {data}")
             if data:
@@ -315,7 +379,7 @@ class PowerSupplyGUI(ctk.CTk):
         run auto-detect on the ui thread but show a busy cursor.
         note: ui will be unresponsive during the scan (by design).
         """
-        target = self.serial_var.get().strip()
+        target = self.serial_var.get() # self.serial_var.get().strip()
         if not target:
             messagebox.showwarning("auto connect", "enter a device serial first")
             return
@@ -443,15 +507,21 @@ class PowerSupplyGUI(ctk.CTk):
         if not self.ensure_connected():
             return
         try:
-            value = int(self.power_var.get())
+            # reads decimal value
+            user_value = float(self.power_vardigit.get())
+            scaled_value = int(user_value * 10)  
         except ValueError:
-            messagebox.showwarning("invalid power", "enter an integer 0..9999")
+            messagebox.showwarning("Invalid power", "Enter a number between 70.0 and 105.0")
             return
+
+        # limits
+        scaled_value = max(700, min(scaled_value, 1050))
+
         try:
-            resp = self.psu.set_power(value)
-            self.log(f"> P={value:04d}\n< {resp}")
+            resp = self.psu.set_power(scaled_value)
+            self.log(f"> P={scaled_value:04d}\n< {resp}")
         except Exception as e:
-            messagebox.showerror("set power failed", str(e))
+            messagebox.showerror("Set power failed", str(e))
 
     def query_status_handler(self) -> None:
         if not self.ensure_connected():
