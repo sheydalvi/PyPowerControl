@@ -7,6 +7,8 @@ from src.serial_comm import PowerSupplyCommunicator, list_available_ports, find_
 import time
 import json
 import os
+from datetime import datetime
+
 
 ctk.set_appearance_mode("System")  # options: "system", "dark", "light"
 ctk.set_default_color_theme("blue")  # you can change this to "green", "dark-blue", etc.
@@ -90,7 +92,7 @@ class PowerSupplyGUI(ctk.CTk):
 
         # basic window setup
         self.title("power supply controller")
-        self.geometry("720x460")
+        self.geometry("600x460")
         # optional: set default theme / appearance
         # ctk.set_appearance_mode("system")  # or "light" / "dark"
         # ctk.set_default_color_theme("blue")  # "blue", "green", "dark-blue"
@@ -117,14 +119,14 @@ class PowerSupplyGUI(ctk.CTk):
 
 
 
-        self.auto_btn = ctk.CTkButton(auto_row, text="auto connect", command=self.auto_connect, width=120)
+        self.auto_btn = ctk.CTkButton(auto_row, text="Find PS", command=self.auto_connect, width=90)
         self.auto_btn.pack(side="left", padx=8)
 
         
-        self.start_auto_btn = ctk.CTkButton(auto_row, text="start auto-query", command=self.start_auto_query, width=120)
+        self.start_auto_btn = ctk.CTkButton(auto_row, text="syncing", command=self.start_auto_query, width=90)
         self.start_auto_btn.pack(side="left", padx=6)
 
-        self.stop_auto_btn = ctk.CTkButton(auto_row, text="stop auto-query", command=self.stop_auto_query, width=120)
+        self.stop_auto_btn = ctk.CTkButton(auto_row, text="pause sync", command=self.stop_auto_query, width=90)
         self.stop_auto_btn.pack(side="left", padx=6)
 
 
@@ -153,7 +155,7 @@ class PowerSupplyGUI(ctk.CTk):
 
         self.disconnect_btn = ctk.CTkButton(top, text="disconnect", command=self.disconnect, width=100)
         self.disconnect_btn.pack(side="left", padx=6)
- 
+        ###
 
         # ===== switches row =====
         switch_row = ctk.CTkFrame(self)
@@ -171,14 +173,6 @@ class PowerSupplyGUI(ctk.CTk):
             command=lambda: self.handle_switch("fan", self.fan_var),
         )
         self.fan_sw.pack(side="left", padx=10)
-
-        self.shutter_sw = ctk.CTkSwitch(
-            switch_row,
-            text="shutter",
-            variable=self.shutter_var,
-            command=lambda: self.handle_switch("shutter", self.shutter_var),
-        )
-        self.shutter_sw.pack(side="left", padx=10)
 
         self.lamp_sw = ctk.CTkSwitch(
             switch_row,
@@ -236,6 +230,20 @@ class PowerSupplyGUI(ctk.CTk):
         feedback_frame.grid_columnconfigure(1, weight=1)
         feedback_frame.grid_columnconfigure(2, weight=1)
 
+        # ===== shutter =====
+        if config["HasShutter"] == 1:
+            shutter_frame = ctk.CTkFrame(self)
+            shutter_frame.pack(fill="x", padx=12, pady=8)
+
+            self.shutter_sw = ctk.CTkSwitch(
+            shutter_frame,
+            text="shutter",
+            variable=self.shutter_var,
+            command=lambda: self.handle_switch("shutter", self.shutter_var),
+            )
+            self.shutter_sw.pack(side="left", padx=10)
+        
+
 
         # ===== output log =====
         out_frame = ctk.CTkFrame(self)
@@ -274,19 +282,6 @@ class PowerSupplyGUI(ctk.CTk):
         try:
             t0 = time.monotonic()
             data = self.psu.query_status()
-
-            # if data:
-                # def safe_float(value, default=0.0):
-                #     try:
-                #         return float(value)
-                #     except (TypeError, ValueError):
-                #         return default
-
-                # self.voltage_var.set(f"{safe_float(data.get('VOLTAGE'))/config["LampVoltageFactor"]:.2f} V")
-                # self.current_var.set(f"{safe_float(data.get('CURRENT'))/config["LampCurrentFactor"]:.2f} A")
-                # self.current_var.set(f"{data.get('CURRENT'):.2f} A")
-                # self.power_var.set(f"{safe_float(data.get('POWER'))/config["LampPowerFactor"]:.1f} W") 
-
             dt = (time.monotonic() - t0) * 1000
             self.log(f"FS reply in {dt:.1f} ms: {data}")
             if data:
@@ -325,14 +320,22 @@ class PowerSupplyGUI(ctk.CTk):
         return False
 
 
-
-
     def log(self, text: str) -> None:
         """
         append text to the output box.
         """
+
+        timestamp = datetime.now().strftime("[%Y-%m-%d %H:%M:%S] ")
+        message = timestamp + text
         self.output.insert("end", text + "\n")
         self.output.see("end")
+
+        # get the path of the directory where the script is located
+        log_path = os.path.join(os.path.dirname(__file__), "log.txt")
+
+        # append the same text to a file
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(message + "\n")
 
     def _set_port_values(self, ports: list[str]) -> None:
         """

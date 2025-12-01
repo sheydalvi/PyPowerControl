@@ -7,7 +7,7 @@
     "MinimumOutput": 70,
     "MaximumOutput": 105,
     "lampRestartDelayTime": 5,
-    "HasShutter": 0,
+    "HasShutter": 1,
     "VoltageSettingSupported": 0,
     "CurrentSettingSupported": 0,
     "OutputIntensitySettingSupported": 0,
