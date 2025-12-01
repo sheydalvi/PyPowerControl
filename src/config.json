@@ -23,5 +23,6 @@
     "LampCurrentFactor": 1,
     "LampVoltageFactor": 10, 
     "LampPowerFactor": 1000000,
-    "MonitoringTime": 2000
+    "MonitoringTime": 2000,
+    "log" : 1
 }

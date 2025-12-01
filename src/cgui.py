@@ -8,9 +8,10 @@ import time
 import json
 import os
 from datetime import datetime
+from PIL import Image, ImageTk
 
 
-ctk.set_appearance_mode("System")  # options: "system", "dark", "light"
+ctk.set_appearance_mode("light")  # options: "system", "dark", "light"
 ctk.set_default_color_theme("blue")  # you can change this to "green", "dark-blue", etc.
 
 COMMANDS: Dict[str, tuple[str, str]] = {
@@ -92,7 +93,7 @@ class PowerSupplyGUI(ctk.CTk):
 
         # basic window setup
         self.title("power supply controller")
-        self.geometry("600x460")
+        self.geometry("600x800")
         # optional: set default theme / appearance
         # ctk.set_appearance_mode("system")  # or "light" / "dark"
         # ctk.set_default_color_theme("blue")  # "blue", "green", "dark-blue"
@@ -108,33 +109,33 @@ class PowerSupplyGUI(ctk.CTk):
         auto_row.pack(fill="x", padx=12, pady=(0, 8))
 
         print("Loaded configuration:", config)
-        ctk.CTkLabel(auto_row, text="device serial").pack(side="left", padx=(8, 6))
+        ctk.CTkLabel(auto_row, text="device serial").pack(side="left", padx=(8, 6), pady=5)
         # self.serial_var = tk.StringVar(value="")
         # self.serial_entry = ctk.CTkEntry(auto_row, textvariable=self.serial_var, width=180)
         # self.serial_entry.pack(side="left", padx=6)
         self.serial_var = tk.StringVar(value=config["sn"])
 
         self.serial_entry = ctk.CTkEntry(auto_row, textvariable=self.serial_var, width=180)
-        self.serial_entry.pack(side="left", padx=6)
+        self.serial_entry.pack(side="left", padx=5, pady=5)
 
 
 
         self.auto_btn = ctk.CTkButton(auto_row, text="Find PS", command=self.auto_connect, width=90)
-        self.auto_btn.pack(side="left", padx=8)
+        self.auto_btn.pack(side="left", padx=5, pady=5)
 
         
         self.start_auto_btn = ctk.CTkButton(auto_row, text="syncing", command=self.start_auto_query, width=90)
-        self.start_auto_btn.pack(side="left", padx=6)
+        self.start_auto_btn.pack(side="left", padx=5, pady=5)
 
         self.stop_auto_btn = ctk.CTkButton(auto_row, text="pause sync", command=self.stop_auto_query, width=90)
-        self.stop_auto_btn.pack(side="left", padx=6)
+        self.stop_auto_btn.pack(side="left", padx=5, pady=5)
 
 
         top = ctk.CTkFrame(self)
         top.pack(fill="x", padx=12, pady=10)
 
         self.port_label = ctk.CTkLabel(top, text="port")
-        self.port_label.pack(side="left", padx=(8, 6))
+        self.port_label.pack(side="left", padx=(8, 6), pady=5)
 
         # customtkinter provides ctk.CTkOptionMenu; we use it like a read-only combobox
         self.port_values: list[str] = []
@@ -145,52 +146,103 @@ class PowerSupplyGUI(ctk.CTk):
             values=self.port_values or ["<no ports>"],
             width=180,
         )
-        self.port_menu.pack(side="left", padx=6)
+        self.port_menu.pack(side="left", padx=6, pady=5)
 
         self.refresh_btn = ctk.CTkButton(top, text="refresh", command=self.refresh_ports, width=90)
-        self.refresh_btn.pack(side="left", padx=6)
+        self.refresh_btn.pack(side="left", padx=6, pady=5)
 
         self.connect_btn = ctk.CTkButton(top, text="connect", command=self.connect_to_selected, width=90)
-        self.connect_btn.pack(side="left", padx=6)
+        self.connect_btn.pack(side="left", padx=6, pady=5)
 
         self.disconnect_btn = ctk.CTkButton(top, text="disconnect", command=self.disconnect, width=100)
-        self.disconnect_btn.pack(side="left", padx=6)
+        self.disconnect_btn.pack(side="left", padx=6, pady=5)
         ###
 
         # ===== switches row =====
         switch_row = ctk.CTkFrame(self)
         switch_row.pack(fill="x", padx=12, pady=8)
 
+        # upload images as icons
+        def img(filename):
+            return tk.PhotoImage(file=os.path.join(os.path.dirname(__file__), filename))
+
+        # Load your images
+        self.fan_img = img("fan_color.png")
+        self.lamp_img = img("lamp_color.png")
+        self.shutter_img = img("shutter.png")
+
+        center_container = ctk.CTkFrame(switch_row)
+        center_container.pack(side="right", padx=5, pady=5) 
+
+        # Fan frame
+        fan_frame = ctk.CTkFrame(center_container)
+        fan_frame.pack(side="left", padx=5, pady=5)
+
+        self.fan_icon_label = ctk.CTkLabel(fan_frame, image=self.fan_img, text='FAN', compound='bottom', font=("Arial", 10))
+        self.fan_icon_label.pack(pady=5) 
+
         # note: customtkinter switches don't need explicit booleanvars, but using them makes state handling simple
         self.fan_var = tk.BooleanVar(value=False)
-        self.shutter_var = tk.BooleanVar(value=False)
-        self.lamp_var = tk.BooleanVar(value=False)
 
         self.fan_sw = ctk.CTkSwitch(
-            switch_row,
-            text="fan",
+            fan_frame,
+            text="",
             variable=self.fan_var,
+            width=50,
+            switch_width=50,
             command=lambda: self.handle_switch("fan", self.fan_var),
         )
-        self.fan_sw.pack(side="left", padx=10)
+        self.fan_sw.pack(pady=5)
+
+        # Lamp frame
+        lamp_frame = ctk.CTkFrame(center_container)
+        lamp_frame.pack(side="left", padx=5, pady=5)
+
+        self.lamp_icon_label = ctk.CTkLabel(lamp_frame, image=self.lamp_img, text='LAMP', compound='bottom', font=("Arial", 10))
+        self.lamp_icon_label.pack(pady=5)
+
+        self.lamp_var = tk.BooleanVar(value=False)
 
         self.lamp_sw = ctk.CTkSwitch(
-            switch_row,
-            text="lamp",
+            lamp_frame,
+            text="",
+            width=50,
+            switch_width=50,
             variable=self.lamp_var,
             command=lambda: self.handle_switch("lamp", self.lamp_var),
         )
-        self.lamp_sw.pack(side="left", padx=10)
+        self.lamp_sw.pack(pady=5)
 
-        # ===== power controls =====
-        power_row = ctk.CTkFrame(self)
-        power_row.pack(fill="x", padx=12, pady=8)
+        if config["HasShutter"] == 1:
+            self.shutter_var = tk.BooleanVar(value=False)
 
-        self.power_label = ctk.CTkLabel(power_row, text="")
-        self.power_label.pack(side="left", padx=(8, 6))
+            shutter_frame = ctk.CTkFrame(center_container)
+            shutter_frame.pack(side="right", padx=5, pady=5)
+
+            self.shutt_icon_label = ctk.CTkLabel(shutter_frame, image=self.shutter_img, text='SHUTTER', compound='bottom', font=("Arial", 10))
+            self.shutt_icon_label.pack(pady=5)
+
+            self.shutter_sw = ctk.CTkSwitch(
+            shutter_frame,
+            text="",
+            width=50,
+            switch_width=50,
+            variable=self.shutter_var,
+            command=lambda: self.handle_switch("shutter", self.shutter_var),
+            )
+            self.shutter_sw.pack(pady=5)
+
+        # power frame
+        power_frame = ctk.CTkFrame(switch_row)
+        power_frame.pack(side="left", padx=20, pady=5)
+
+        ctk.CTkLabel(power_frame, text='POWER %', font=("Arial", 16)).pack(pady=(5, 0))
+
+        self.power_label = ctk.CTkLabel(power_frame, text="")
+        self.power_label.pack(side="left", padx=(8, 6), pady=5)
 
         self.power_vardigit = tk.StringVar(value="0")
-        self.power_entry = ctk.CTkEntry(power_row, textvariable=self.power_vardigit, width=90)
+        self.power_entry = ctk.CTkEntry(power_frame, textvariable=self.power_vardigit, width=90)
         self.power_entry.bind("<Return>", self._on_power_edit_end)
         self.power_entry.pack(side="left", padx=6)
 
@@ -199,64 +251,76 @@ class PowerSupplyGUI(ctk.CTk):
         self.power_entry.bind("<FocusOut>", self._on_power_edit_end)
         self.power_entry.bind("<Return>", self._on_power_commit) 
 
+        self.set_btn = ctk.CTkButton(power_frame, text="set", command=self.set_power, width=80)
+        self.set_btn.pack(side="right", padx=6, pady=5)
 
-        self.set_btn = ctk.CTkButton(power_row, text="set", command=self.set_power, width=80)
-        self.set_btn.pack(side="left", padx=6)
-
-        self.status_btn = ctk.CTkButton(power_row, text="status", command=self.query_status_handler, width=90)
-        self.status_btn.pack(side="left", padx=6)
+        # self.status_btn = ctk.CTkButton(power_row, text="status", command=self.query_status_handler, width=90)
+        # self.status_btn.pack(side="right", padx=6)
 
         # ===== feedback =====
-        feedback_frame = ctk.CTkFrame(self)
-        feedback_frame.pack(fill="x", padx=12, pady=8)
+        feedback_frame = ctk.CTkFrame(self, corner_radius=12, fg_color=("gray90", "gray13"))
+        feedback_frame.pack(fill="x", padx=12, pady=12)
 
         # StringVars for live values
         self.voltage_var = ctk.StringVar(value="0.00 V")
         self.current_var = ctk.StringVar(value="0.00 A")
-        self.power_var   = ctk.StringVar(value="0.00 W")
+        self.power_var = ctk.StringVar(value="0.00 W")
+        self.lamplife_var = ctk.StringVar(value="0 min")
 
-        # Column headers
-        ctk.CTkLabel(feedback_frame, text="Voltage", font=("Arial", 14, "bold")).grid(row=0, column=0, padx=10, pady=(0, 4))
-        ctk.CTkLabel(feedback_frame, text="Current", font=("Arial", 14, "bold")).grid(row=0, column=1, padx=10, pady=(0, 4))
-        ctk.CTkLabel(feedback_frame, text="Power", font=("Arial", 14, "bold")).grid(row=0, column=2, padx=10, pady=(0, 4))
+        title = ctk.CTkLabel(
+            feedback_frame,
+            text="System Feedback",
+            font=("Roboto Mono", 14, "bold")
+        )
+        title.pack(pady=(10, 5))
 
-        # Live values
-        ctk.CTkLabel(feedback_frame, textvariable=self.voltage_var, font=("Consolas", 14)).grid(row=1, column=0, padx=10)
-        ctk.CTkLabel(feedback_frame, textvariable=self.current_var, font=("Consolas", 14)).grid(row=1, column=1, padx=10)
-        ctk.CTkLabel(feedback_frame, textvariable=self.power_var, font=("Consolas", 14)).grid(row=1, column=2, padx=10)
+        # separator line
+        ctk.CTkFrame(
+            feedback_frame,
+            height=2,
+            fg_color=("gray70", "gray30")
+        ).pack(fill="x", padx=10, pady=(0, 15))
 
-        # Center and expand columns evenly
-        feedback_frame.grid_columnconfigure(0, weight=1)
-        feedback_frame.grid_columnconfigure(1, weight=1)
-        feedback_frame.grid_columnconfigure(2, weight=1)
+        # ---- row of metrics ----
+        row = ctk.CTkFrame(feedback_frame, fg_color="transparent")
+        row.pack(fill="x", pady=10)
 
-        # ===== shutter =====
-        if config["HasShutter"] == 1:
-            shutter_frame = ctk.CTkFrame(self)
-            shutter_frame.pack(fill="x", padx=12, pady=8)
+        header_font = ("Roboto Mono", 14, "bold")
+        value_font = ("Roboto Mono", 14, "bold")
 
-            self.shutter_sw = ctk.CTkSwitch(
-            shutter_frame,
-            text="shutter",
-            variable=self.shutter_var,
-            command=lambda: self.handle_switch("shutter", self.shutter_var),
-            )
-            self.shutter_sw.pack(side="left", padx=10)
-        
+        def block(parent, label, var):
+            f = ctk.CTkFrame(parent, corner_radius=6, fg_color=("gray85", "gray20"))
+            f.grid_propagate(False)
+            f.configure(width=140, height=80)
+
+            ctk.CTkLabel(f, text=label, font=header_font).pack(pady=(5, 0))
+            ctk.CTkLabel(f, textvariable=var, font=value_font).pack()
+            return f
+
+        block(row, "  Voltage  ", self.voltage_var).grid(row=0, column=0, padx=10)
+        block(row, "  Current  ", self.current_var).grid(row=0, column=1, padx=10)
+        block(row, "  Power  ",   self.power_var).grid(row=0, column=2, padx=10)
+        block(row, "  Lamp Age  ", self.lamplife_var).grid(row=0, column=3, padx=10)
+
+
+        # make all columns expand evenly
+        for i in range(4):
+            row.grid_columnconfigure(i, weight=1)
 
 
         # ===== output log =====
-        out_frame = ctk.CTkFrame(self)
-        out_frame.pack(fill="both", expand=True, padx=12, pady=10)
+        if config["log"] == 1:
+            out_frame = ctk.CTkFrame(self)
+            out_frame.pack(fill="both", expand=True, padx=12, pady=10)
 
-        self.output = ctk.CTkTextbox(out_frame, wrap="word")
-        self.output.pack(fill="both", expand=True, padx=8, pady=8)
+            self.output = ctk.CTkTextbox(out_frame, wrap="word")
+            self.output.pack(fill="both", expand=True, padx=8, pady=8)
 
-        # initialize available ports
-        self.refresh_ports()
+            # initialize available ports
+            self.refresh_ports()
 
-        # graceful close
-        self.protocol("WM_DELETE_WINDOW", self.on_close)
+            # graceful close
+            self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     # ===== ui helpers =====
 
@@ -524,11 +588,10 @@ class PowerSupplyGUI(ctk.CTk):
                 power_raw = as_float(status["POWER"])/config["LampPowerFactor"]
                 self.power_var.set(f"{power_raw:.1f} W")
 
-            if "OUTPUT" in status:
-                output = as_float(status["OUTPUT"])/10
-                # also update the editable power entry if user isn't typing
-                if not getattr(self, "_editing_power", False):
-                    self.power_vardigit.set(f"{output:.1f}")
+            if "HOUR" and "MINUTES" in status:
+                lamplife = status["HOUR"] * 60 + status["MINUTES"]
+                self.lamplife_var.set(f"{lamplife} min")
+
         finally:
             self._syncing_from_status = False
 
