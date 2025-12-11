@@ -5,8 +5,7 @@ from tkinter import messagebox
 import tkinter as tk
 from src.serial_comm import PowerSupplyCommunicator, list_available_ports, find_com_port_by_sn
 import time
-import json
-import os
+import json, sys, os
 from datetime import datetime
 from PIL import Image, ImageTk
 
@@ -22,8 +21,17 @@ COMMANDS: Dict[str, tuple[str, str]] = {
 
 def read_config(filename="config.json"):
     """Read configuration from a JSON file and return as a dict."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    filepath = os.path.join(script_dir, filename)
+    # Determine correct path whether running from source or PyInstaller
+    if hasattr(sys, '_MEIPASS'):
+        # PyInstaller bundle directory
+        base_path = sys._MEIPASS
+    else:
+        # Folder where this script file lives
+        base_path = os.path.dirname(os.path.abspath(__file__))
+
+    filepath = os.path.join(base_path, filename)
+    print("CONFIG PATH:", filepath)
+    print("EXISTS?", os.path.exists(filepath))
 
     if os.path.exists(filepath):
         with open(filepath, "r", encoding="utf-8") as f:
@@ -31,10 +39,19 @@ def read_config(filename="config.json"):
                 return json.load(f)
             except json.JSONDecodeError:
                 print("Error: config.json is not valid JSON.")
+                return {}
     else:
         print(f"File not found: {filepath}")
-    return {}
-config = read_config("config.json")
+        return {}
+
+# to make the file finding pyinstaller friendly
+def resource_path(relative_path):
+    """Get path relative to the executable."""
+    if getattr(sys, 'frozen', False): 
+        base_path = sys._MEIPASS   
+    else:
+        base_path = os.path.dirname(__file__) 
+    return os.path.join(base_path, relative_path)
 
 
 def command_for(name: str, state_on: bool) -> str:
@@ -93,7 +110,7 @@ class PowerSupplyGUI(ctk.CTk):
 
         # basic window setup
         self.title("power supply controller")
-        self.geometry("600x800")
+        self.geometry("600x500")
         # optional: set default theme / appearance
         # ctk.set_appearance_mode("system")  # or "light" / "dark"
         # ctk.set_default_color_theme("blue")  # "blue", "green", "dark-blue"
@@ -108,11 +125,10 @@ class PowerSupplyGUI(ctk.CTk):
         auto_row = ctk.CTkFrame(self)
         auto_row.pack(fill="x", padx=12, pady=(0, 8))
 
+        config = read_config("config.json")
+
         print("Loaded configuration:", config)
         ctk.CTkLabel(auto_row, text="device serial").pack(side="left", padx=(8, 6), pady=5)
-        # self.serial_var = tk.StringVar(value="")
-        # self.serial_entry = ctk.CTkEntry(auto_row, textvariable=self.serial_var, width=180)
-        # self.serial_entry.pack(side="left", padx=6)
         self.serial_var = tk.StringVar(value=config["sn"])
 
         self.serial_entry = ctk.CTkEntry(auto_row, textvariable=self.serial_var, width=180)
@@ -139,7 +155,7 @@ class PowerSupplyGUI(ctk.CTk):
 
         # customtkinter provides ctk.CTkOptionMenu; we use it like a read-only combobox
         self.port_values: list[str] = []
-        self.port_var = tk.StringVar(value="")
+        self.port_var = tk.StringVar(value=config.get("sn", ""))
         self.port_menu = ctk.CTkOptionMenu(
             top,
             variable=self.port_var,
@@ -167,9 +183,9 @@ class PowerSupplyGUI(ctk.CTk):
             return tk.PhotoImage(file=os.path.join(os.path.dirname(__file__), filename))
 
         # Load your images
-        self.fan_img = img("fan_color.png")
-        self.lamp_img = img("lamp_color.png")
-        self.shutter_img = img("shutter.png")
+        self.fan_img = ctk.CTkImage(light_image=Image.open(resource_path("images/fan_color.png")))
+        self.lamp_img = ctk.CTkImage(light_image=Image.open(resource_path("images/lamp_color.png")))
+        self.shutter_img = ctk.CTkImage(light_image=Image.open(resource_path("images/shutter.png")))
 
         center_container = ctk.CTkFrame(switch_row)
         center_container.pack(side="right", padx=5, pady=5) 
@@ -213,7 +229,7 @@ class PowerSupplyGUI(ctk.CTk):
         )
         self.lamp_sw.pack(pady=5)
 
-        if config["HasShutter"] == 1:
+        if config.get("HasShutter", "") == 1:
             self.shutter_var = tk.BooleanVar(value=False)
 
             shutter_frame = ctk.CTkFrame(center_container)
@@ -236,13 +252,13 @@ class PowerSupplyGUI(ctk.CTk):
         power_frame = ctk.CTkFrame(switch_row)
         power_frame.pack(side="left", padx=20, pady=5)
 
-        ctk.CTkLabel(power_frame, text='POWER %', font=("Arial", 16)).pack(pady=(5, 0))
+        ctk.CTkLabel(power_frame, text='Output %', font=("Arial", 16)).pack(pady=(5, 0))
 
         self.power_label = ctk.CTkLabel(power_frame, text="")
         self.power_label.pack(side="left", padx=(8, 6), pady=5)
 
         self.power_vardigit = tk.StringVar(value="0")
-        self.power_entry = ctk.CTkEntry(power_frame, textvariable=self.power_vardigit, width=90)
+        self.power_entry = ctk.CTkEntry(power_frame, textvariable=self.power_vardigit, width=50)
         self.power_entry.bind("<Return>", self._on_power_edit_end)
         self.power_entry.pack(side="left", padx=6)
 
@@ -251,11 +267,35 @@ class PowerSupplyGUI(ctk.CTk):
         self.power_entry.bind("<FocusOut>", self._on_power_edit_end)
         self.power_entry.bind("<Return>", self._on_power_commit) 
 
-        self.set_btn = ctk.CTkButton(power_frame, text="set", command=self.set_power, width=80)
+        self.set_btn = ctk.CTkButton(power_frame, text="set", command=self.set_power, width=50)
         self.set_btn.pack(side="right", padx=6, pady=5)
 
         # self.status_btn = ctk.CTkButton(power_row, text="status", command=self.query_status_handler, width=90)
         # self.status_btn.pack(side="right", padx=6)
+
+
+        # transmission frame
+        if config.get("HasAtt", "") == 1:
+            attn_frame = ctk.CTkFrame(switch_row)
+            attn_frame.pack(side="left", padx=5, pady=5)
+
+            ctk.CTkLabel(attn_frame, text='Transmission %', font=("Arial", 16)).pack(pady=(5, 0))
+
+            self.attn_label = ctk.CTkLabel(attn_frame, text="")
+            self.attn_label.pack(side="left", padx=5, pady=5)
+
+            self.attn_vardigit = tk.StringVar(value="0")
+            self.attn_entry = ctk.CTkEntry(attn_frame, textvariable=self.attn_vardigit, width=50)
+            self.attn_entry.bind("<Return>", self._on_power_edit_end)
+            self.attn_entry.pack(side="left", padx=6)
+
+            self._editing_power = False
+            self.attn_entry.bind("<FocusIn>", self._on_power_edit_start)
+            self.attn_entry.bind("<FocusOut>", self._on_power_edit_end)
+            self.attn_entry.bind("<Return>", self._on_power_commit) 
+
+            self.set_attn = ctk.CTkButton(attn_frame, text="set", command=self.set_power, width=50)
+            self.set_attn.pack(side="right", padx=5, pady=5)
 
         # ===== feedback =====
         feedback_frame = ctk.CTkFrame(self, corner_radius=12, fg_color=("gray90", "gray13"))
@@ -309,7 +349,7 @@ class PowerSupplyGUI(ctk.CTk):
 
 
         # ===== output log =====
-        if config["log"] == 1:
+        if config.get("log", "") == 1:
             out_frame = ctk.CTkFrame(self)
             out_frame.pack(fill="both", expand=True, padx=12, pady=10)
 
@@ -576,16 +616,17 @@ class PowerSupplyGUI(ctk.CTk):
                 self.shutter_var.set(as_bool(status["SHUTTER"]))
             
             # --- live numeric readouts ---
+            config = read_config("config.json")
             if "VOLTAGE" in status:
-                voltage = as_float(status["VOLTAGE"])/config["LampVoltageFactor"]
+                voltage = as_float(status["VOLTAGE"])/config.get("LampVoltageFactor", "")
                 self.voltage_var.set(f"{voltage:.2f} V")
 
             if "CURRENT" in status:
-                current = as_float(status["CURRENT"])/config["LampCurrentFactor"]
+                current = as_float(status["CURRENT"])/config.get("LampCurrentFactor", "")
                 self.current_var.set(f"{current:.3f} A")
 
             if "POWER" in status:
-                power_raw = as_float(status["POWER"])/config["LampPowerFactor"]
+                power_raw = as_float(status["POWER"])/config.get("LampPowerFactor", "")
                 self.power_var.set(f"{power_raw:.1f} W")
 
             if "HOUR" and "MINUTES" in status:
@@ -603,9 +644,10 @@ class PowerSupplyGUI(ctk.CTk):
         if not self.ensure_connected():
             return
         try:
-            # reads decimal value
+            # reads decimal value this is a 
             user_value = float(self.power_vardigit.get())
-            user_value = max(config["MinimumOutput"], min(user_value, config["MaximumOutput"]))
+            config = read_config("config.json")
+            user_value = max(config.get("MinimumOutput", ""), min(user_value, config.get("MaximumOutput", "")))
 
             scaled_value = int(user_value * 10)  
         except ValueError:
@@ -657,3 +699,6 @@ class PowerSupplyGUI(ctk.CTk):
         self._editing_power = False
         self.focus()  # remove focus from entry
         self.set_power()  # same as clicking the button
+
+
+    

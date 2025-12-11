@@ -5,7 +5,12 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        ('images/fan_color.png', 'images'),
+        ('images/lamp_color.png', 'images'),
+        ('images/shutter.png', 'images'),
+        ('src/config.json', '.'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
