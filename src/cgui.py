@@ -8,6 +8,9 @@ import time
 import json, sys, os
 from datetime import datetime
 from PIL import Image, ImageTk
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+
 
 
 ctk.set_appearance_mode("light")  # options: "system", "dark", "light"
@@ -486,46 +489,82 @@ class PowerSupplyGUI(ctk.CTk):
         except Exception as e:
             messagebox.showerror("connect failed", str(e))
 
+    # def auto_connect(self) -> None:
+    #     """
+    #     run auto-detect on the ui thread but show a busy cursor.
+    #     note: ui will be unresponsive during the scan (by design).
+    #     """
+    #     target = self.serial_var.get() # self.serial_var.get().strip()
+    #     if not target:
+    #         messagebox.showwarning("auto connect", "enter a device serial first")
+    #         return
+
+    #     # turn on busy state
+    #     self._set_busy(True)
+    #     self.log(f"auto connect: scanning ports for serial '{target}'...")
+
+    #     try:
+    #         # use whatever attribute names you chose
+    #         baud = getattr(self.psu, "baudrate", 9600)
+    #         timeout = getattr(self.psu, "timeout", 2)
+
+    #         # call your existing finder directly (blocking)
+    #         port = find_com_port_by_sn(target_serial=target, baudrate=baud, timeout=timeout)
+
+    #         if not port:
+    #             self.log("auto connect: device not found")
+    #             return
+
+    #         # connect and reflect in ui
+    #         self.psu.connect(port)
+    #         self.port_var.set(port)
+    #         self.log(f"auto connect: connected to {port}")
+    #         self.start_auto_query()
+
+
+    #     except Exception as e:
+    #         from tkinter import messagebox
+    #         messagebox.showerror("auto connect error", str(e))
+
+    #     finally:
+    #         # always restore cursor and buttons
+    #         self._set_busy(False)
+
+
     def auto_connect(self) -> None:
         """
-        run auto-detect on the ui thread but show a busy cursor.
-        note: ui will be unresponsive during the scan (by design).
+        Run auto-detect on a background thread so the UI stays responsive.
+        Uses the existing find_com_port_by_sn() from the driver.
         """
-        target = self.serial_var.get() # self.serial_var.get().strip()
+        target = self.serial_var.get()
         if not target:
-            messagebox.showwarning("auto connect", "enter a device serial first")
+            messagebox.showwarning("Auto Connect", "Enter a device serial first")
             return
 
-        # turn on busy state
         self._set_busy(True)
-        self.log(f"auto connect: scanning ports for serial '{target}'...")
+        self.log(f"Auto connect: scanning ports for serial '{target}'...")
 
-        try:
-            # use whatever attribute names you chose
-            baud = getattr(self.psu, "baudrate", 9600)
-            timeout = getattr(self.psu, "timeout", 2)
+        def background_scan():
+            try:
+                baud = getattr(self.psu, "baudrate", 9600)
+                timeout = getattr(self.psu, "timeout", 2)
+                port = find_com_port_by_sn(target_serial=target, baudrate=baud, timeout=timeout)
+            except Exception as e:
+                port = None
+                self.log(f"Auto connect: error during scan: {e}")
 
-            # call your existing finder directly (blocking)
-            port = find_com_port_by_sn(target_serial=target, baudrate=baud, timeout=timeout)
+            # Update UI safely in main thread
+            def finish_scan():
+                if port:
+                    self.log(f"Device found on port {port}")
+                    # optionally: self.connect(port)
+                else:
+                    self.log("Auto connect: device not found")
+                self._set_busy(False)
 
-            if not port:
-                self.log("auto connect: device not found")
-                return
+            self.after(0, finish_scan)
 
-            # connect and reflect in ui
-            self.psu.connect(port)
-            self.port_var.set(port)
-            self.log(f"auto connect: connected to {port}")
-            self.start_auto_query()
-
-
-        except Exception as e:
-            from tkinter import messagebox
-            messagebox.showerror("auto connect error", str(e))
-
-        finally:
-            # always restore cursor and buttons
-            self._set_busy(False)
+        threading.Thread(target=background_scan, daemon=True).start()
 
     def disconnect(self) -> None:
         """

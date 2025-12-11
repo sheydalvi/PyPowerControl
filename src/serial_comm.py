@@ -6,6 +6,7 @@ from serial.tools import list_ports
 from typing import List, Optional, Tuple
 import threading
 
+
 def _parse_status_block(text: str) -> dict:
     """
     parse the device status reply into a dict.
