@@ -20,7 +20,7 @@
     "IsStabilizationOn": 0,
     "MaximumVoltage": 24,
     "MinimumCurrent": 0,
-    "MaximumCurrent": 1.5,
+    "MaximumCurrent": 12,
     "LampCurrentFactor": 10,
     "LampVoltageFactor": 10, 
     "LampPowerFactor": 1000000,

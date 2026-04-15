@@ -489,48 +489,6 @@ class PowerSupplyGUI(ctk.CTk):
         except Exception as e:
             messagebox.showerror("connect failed", str(e))
 
-    # def auto_connect(self) -> None:
-    #     """
-    #     run auto-detect on the ui thread but show a busy cursor.
-    #     note: ui will be unresponsive during the scan (by design).
-    #     """
-    #     target = self.serial_var.get() # self.serial_var.get().strip()
-    #     if not target:
-    #         messagebox.showwarning("auto connect", "enter a device serial first")
-    #         return
-
-    #     # turn on busy state
-    #     self._set_busy(True)
-    #     self.log(f"auto connect: scanning ports for serial '{target}'...")
-
-    #     try:
-    #         # use whatever attribute names you chose
-    #         baud = getattr(self.psu, "baudrate", 9600)
-    #         timeout = getattr(self.psu, "timeout", 2)
-
-    #         # call your existing finder directly (blocking)
-    #         port = find_com_port_by_sn(target_serial=target, baudrate=baud, timeout=timeout)
-
-    #         if not port:
-    #             self.log("auto connect: device not found")
-    #             return
-
-    #         # connect and reflect in ui
-    #         self.psu.connect(port)
-    #         self.port_var.set(port)
-    #         self.log(f"auto connect: connected to {port}")
-    #         self.start_auto_query()
-
-
-    #     except Exception as e:
-    #         from tkinter import messagebox
-    #         messagebox.showerror("auto connect error", str(e))
-
-    #     finally:
-    #         # always restore cursor and buttons
-    #         self._set_busy(False)
-
-
     def auto_connect(self) -> None:
         """
         Run auto-detect on a background thread so the UI stays responsive.
@@ -668,8 +626,8 @@ class PowerSupplyGUI(ctk.CTk):
                 power_raw = as_float(status["POWER"])/config.get("LampPowerFactor", "")
                 self.power_var.set(f"{power_raw:.1f} W")
 
-            if "HOUR" and "MINUTES" in status:
-                lamplife = status["HOUR"] * 60 + status["MINUTES"]
+            if "HOURS" and "LAMP MINUTES" in status:
+                lamplife = status["HOURS"] * 60 + status["LAMP MINUTES"]
                 self.lamplife_var.set(f"{lamplife} min")
 
         finally:
